@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      elysia:
+        patterns:
+          - "elysia"
+          - "@elysiajs/*"
+      drizzle:
+        patterns:
+          - "drizzle-orm"
+          - "drizzle-kit"
+          - "drizzle-typebox"
+      dev-tools:
+        patterns:
+          - "@biomejs/biome"
+          - "@types/bun"
+          - "cspell"
+          - "markdownlint-cli"
+          - "typescript"

@@ -1,0 +1,40 @@
+version: "0.2"
+
+language: en
+
+words:
+  # Framework / runtime
+  - elysia
+  - elysiajs
+  - bun
+  - bunfig
+  # Database / infra
+  - turso
+  - tursodatabase
+  - libsql
+  # Notion
+  - notionhq
+  # Auth / security
+  - hmac
+  - ccpa
+  # TypeBox / ORM
+  - typebox
+  - drizzle
+  - upsert
+  - upserts
+  - upserted
+  # Misc technical
+  - slugified
+  - cloudflared
+  - mdlint
+  # British spelling (used in British-authored libs)
+  - behaviour
+  - synchronisation
+
+ignorePaths:
+  - node_modules
+  - dist
+  - drizzle
+  - bun.lock
+  - "*.yaml"
+  - "*.json"
