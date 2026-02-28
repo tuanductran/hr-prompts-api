@@ -118,6 +118,6 @@ We may update this Privacy Policy from time to time. When we make significant ch
 
 If you have any questions, concerns, or requests related to this Privacy Policy, please contact us at:
 
-**Email:** contact@hr-expert-assistant.app
+**Email:** tuanductran.dev@gmail.com
 
 We will respond to all privacy-related inquiries within 30 days.
