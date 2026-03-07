@@ -4,59 +4,73 @@ The project uses [Turso](https://turso.tech) — a distributed libSQL/SQLite dat
 
 ## Schema
 
-Four tables store all content:
+Four tables are defined in `src/db/schema.ts`.
 
 ### `categories`
 
-Top-level HR domains (e.g. Recruiting, Compliance).
+Top-level HR domains (e.g. Recruiting, Compliance). Populated dynamically from Notion.
 
-| Column | Type | Description |
+| Column | Type | Notes |
 |---|---|---|
-| `id` | text (PK) | Slugified name, e.g. `recruiting` |
-| `name` | text | Display name |
-| `type` | text enum | `database` or `page` (Notion source type) |
-| `notion_id` | text | Notion data source ID or page ID |
-| `synced_at` | integer | Timestamp of last sync |
+| `id` | `text` (PK) | Slugified category name, e.g. `recruiting` |
+| `name` | `text NOT NULL` | Display name |
+| `type` | `text NOT NULL` | `"database"` or `"page"` — reflects the Notion source type |
+| `notion_id` | `text NOT NULL` | Notion data source ID (for `database`) or page ID (for `page`) |
+| `description` | `text` | Optional description |
+| `synced_at` | `integer` (timestamp) | Unix timestamp of last sync |
 
 ### `topics`
 
 Sub-topics within a category (e.g. "Conducting Reference Checks").
 
-| Column | Type | Description |
+| Column | Type | Notes |
 |---|---|---|
-| `id` | text (PK) | Slugified, e.g. `recruiting--conducting-reference-checks--02b0893c` |
-| `category_id` | text (FK) | References `categories.id` |
-| `name` | text | Display name |
-| `description` | text | Optional description |
-| `notion_id` | text | Notion page ID |
-| `synced_at` | integer | Timestamp of last sync |
+| `id` | `text` (PK) | Composite slug, e.g. `recruiting--conducting-reference-checks--02b0893c` |
+| `category_id` | `text NOT NULL` (FK → `categories.id`) | Cascades on delete |
+| `name` | `text NOT NULL` | Display name |
+| `description` | `text` | Optional description extracted from the Notion page |
+| `notion_id` | `text NOT NULL` | Notion page ID |
+| `synced_at` | `integer` (timestamp) | Unix timestamp of last sync |
 
 ### `prompts`
 
 Individual HR prompt text items within a topic.
 
-| Column | Type | Description |
+| Column | Type | Notes |
 |---|---|---|
-| `id` | integer (PK) | Auto-increment |
-| `topic_id` | text (FK) | References `topics.id` |
-| `text` | text | The prompt text |
-| `order_index` | integer | Display order within the topic |
+| `id` | `integer` (PK, auto-increment) | |
+| `topic_id` | `text NOT NULL` (FK → `topics.id`) | Cascades on delete |
+| `text` | `text NOT NULL` | The prompt text |
+| `order_index` | `integer NOT NULL` | Display order within the topic (default: 0) |
 
 ### `sync_log`
 
 Records the history of data sync operations.
 
-| Column | Type | Description |
+| Column | Type | Notes |
 |---|---|---|
-| `id` | integer (PK) | Auto-increment |
-| `status` | text enum | `started`, `completed`, or `failed` |
-| `details` | text | Optional notes or error message |
-| `started_at` | integer | When the sync started |
-| `completed_at` | integer | When the sync finished |
+| `id` | `integer` (PK, auto-increment) | |
+| `status` | `text NOT NULL` | `"started"`, `"completed"`, or `"failed"` |
+| `details` | `text` | JSON-encoded counts on success; error message string on failure |
+| `started_at` | `integer NOT NULL` (timestamp) | When the sync started |
+| `completed_at` | `integer` (timestamp) | When the sync finished (null if still running) |
+
+## Drizzle row types
+
+`src/db/schema.ts` exports inferred types with a `Row` suffix:
+
+```ts
+export type CategoryRow = typeof categories.$inferSelect;
+export type TopicRow    = typeof topics.$inferSelect;
+export type PromptRow   = typeof prompts.$inferSelect;
+export type SyncLogRow  = typeof syncLog.$inferSelect;
+```
+
+These are different from the application-layer types in `src/types.ts` (`Category`, `Topic`, `Prompt`) which have different shapes designed for API responses.
 
 ## Migrations
 
-Drizzle Kit manages schema migrations.
+Drizzle Kit manages schema migrations. Migration files are stored in `drizzle/` and should not be edited manually.
 
 ```bash
 # After changing src/db/schema.ts, generate a new migration file
@@ -69,23 +83,21 @@ bun run db:migrate
 bun run db:studio
 ```
 
-Migration files are stored in `drizzle/`.
+## Connection
+
+The Drizzle client in `src/db/index.ts` uses the HTTP transport (`drizzle-orm/libsql/http`):
+
+- **Production:** connects to Turso using `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`
+- **Local / dev:** falls back to `file:./local.db` when `TURSO_DATABASE_URL` is not set
+
+Do not change the transport from HTTP to WebSocket — HTTP is required for reliable operation on Vercel serverless functions.
 
 ## Local development
 
-When `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are not set, the database falls back to a local SQLite file:
+When Turso credentials are not set, the database falls back to a local SQLite file `local.db` in the project root. This file is listed in `.gitignore`.
 
-```text
-local.db
+Run migrations against the local file before starting the dev server:
+
+```bash
+bun run db:migrate
 ```
-
-This file is listed in `.gitignore` and is only used during local development.
-
-## Connection
-
-The Drizzle client is configured in `src/db/index.ts`:
-
-- **Production / Vercel:** uses `drizzle-orm/libsql/http` (HTTP transport — reliable on serverless)
-- **Local fallback:** uses `file:./local.db`
-
-The HTTP transport (not WebSocket) is used because it works reliably on Vercel's serverless edge functions.

@@ -1,6 +1,6 @@
 # Authentication
 
-All API endpoints (except `/health`, `/openapi`, and `/webhook/notion`) are protected by an optional Bearer token.
+All API endpoints (except `/health`, `/openapi`, and `/webhook/notion/*`) are protected by an optional Bearer token.
 
 ## Enabling authentication
 
@@ -40,13 +40,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 openssl rand -hex 32
 ```
 
-Example output:
-
-```text
-a3f8d2e1c4b7a9e0f6d5c2b1a8e7f4d3c0b9a6e5f2d1c8b7a4e3f0d9c6b5a2
-```
-
-Copy this value into `.env` as `API_KEY`.
+Copy the output into `.env` as `API_KEY`.
 
 ## Setting the token in ChatGPT Custom GPT
 
@@ -57,7 +51,7 @@ Copy this value into `.env` as `API_KEY`.
 5. Paste the same value from `API_KEY` into the **API Key** field
 6. Save
 
-ChatGPT will now include `Authorization: Bearer <token>` in every API request.
+ChatGPT will now include `Authorization: Bearer <token>` in every API request automatically.
 
 ## Unauthorized response
 
@@ -72,11 +66,11 @@ HTTP/1.1 401 Unauthorized
 }
 ```
 
-## Endpoints that do not require authentication
+## Public endpoints (no authentication required)
 
 | Endpoint | Reason |
 |---|---|
-| `GET /health` | Health check |
+| `GET /health` | Health check — used for uptime monitoring |
 | `GET /openapi` | Interactive API docs |
-| `POST /webhook/notion` | Notion webhook (uses HMAC instead of Bearer) |
-| `GET /webhook/notion/token` | Retrieve last webhook verification token |
+| `POST /webhook/notion` | Notion webhook — authenticated via HMAC-SHA256 instead |
+| `GET /webhook/notion/token` | Retrieve last webhook verification token during setup |

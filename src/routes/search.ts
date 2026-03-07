@@ -1,7 +1,7 @@
 import { and, eq, like } from "drizzle-orm";
 import Elysia from "elysia";
-import { db, schema } from "../db";
-import { ErrorSchema, SearchQuery, SearchResponseSchema } from "../models";
+import { db, schema } from "@/db";
+import { ErrorSchema, SearchQuery, SearchResponseSchema } from "@/models";
 
 export const searchRoute = new Elysia().get(
 	"/search",
@@ -74,11 +74,13 @@ export const searchRoute = new Elysia().get(
 	},
 	{
 		detail: {
+			operationId: "searchPrompts",
 			summary: "Search HR prompts",
-			description: "Full-text search across all HR prompts in the knowledge base.",
+			description:
+				"Full-text search across all HR prompts. Use this when the user asks about a specific HR topic or keyword. Returns matched prompts grouped by topic.",
 			tags: ["Search"],
 		},
 		query: SearchQuery,
-		response: { 200: SearchResponseSchema, 400: ErrorSchema },
+		response: { 200: SearchResponseSchema, 400: ErrorSchema, 422: ErrorSchema },
 	},
 );

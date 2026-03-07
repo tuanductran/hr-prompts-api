@@ -1,8 +1,10 @@
 import { createHmac } from "node:crypto";
 import Elysia, { t } from "elysia";
-import { fullSync, syncPage } from "../db/sync";
+import { fullSync, syncPage } from "@/db/sync";
+import { env } from "@/env";
+import { ErrorSchema, VerificationTokenSchema, WebhookReceivedSchema } from "@/models";
 
-const WEBHOOK_SECRET = process.env.NOTION_WEBHOOK_SECRET;
+const WEBHOOK_SECRET = env.NOTION_WEBHOOK_SECRET;
 
 // Temporarily store the last verification token in memory so it can be retrieved via GET
 let lastVerificationToken: { token: string; receivedAt: string } | null = null;
@@ -38,6 +40,7 @@ export const webhookRoute = new Elysia()
 		if (contentType.includes("application/json")) {
 			return request.text(); // body = raw JSON string
 		}
+		return;
 	})
 	// ── GET /webhook/notion/token — retrieve the last verification token ──────
 	.get(
@@ -54,11 +57,13 @@ export const webhookRoute = new Elysia()
 		},
 		{
 			detail: {
+				operationId: "getNotionVerificationToken",
 				summary: "Get last webhook verification token",
 				description:
 					"Returns the last verification_token sent by Notion. Use it in Notion settings to activate the webhook subscription.",
 				tags: ["System"],
 			},
+			response: { 200: VerificationTokenSchema, 404: ErrorSchema },
 		},
 	)
 	// ── POST /webhook/notion — receive Notion webhook events ──────────────────
@@ -111,10 +116,12 @@ export const webhookRoute = new Elysia()
 		{
 			body: t.String(), // raw JSON string from onParse
 			detail: {
+				operationId: "receiveNotionWebhook",
 				summary: "Notion webhook receiver",
 				description:
 					"Receives Notion webhook events. Partial sync on content changes, full sync on structural changes.",
 				tags: ["System"],
 			},
+			response: { 200: WebhookReceivedSchema, 401: ErrorSchema },
 		},
 	);

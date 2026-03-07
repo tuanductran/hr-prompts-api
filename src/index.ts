@@ -4,25 +4,39 @@ import { openapi } from "@elysiajs/openapi";
 import { serverTiming } from "@elysiajs/server-timing";
 import { Elysia } from "elysia";
 import { rateLimit } from "elysia-rate-limit";
-import { APIErrorCode, ClientErrorCode, isNotionClientError } from "./notion";
+import { env, validateProductionEnv } from "@/env";
+import { APIErrorCode, ClientErrorCode, isNotionClientError } from "@/notion";
+
+// ─── Validate required env vars in production ─────────────────────────────────
+if (env.VERCEL === "1") {
+	validateProductionEnv();
+}
+
+import { HealthResponseSchema } from "@/models";
 import {
 	categoriesRoute,
 	promptsRoute,
 	searchRoute,
+	summaryRoute,
 	syncRoute,
 	topicsRoute,
 	webhookRoute,
-} from "./routes";
+} from "@/routes";
 
-const PORT = Number(process.env.PORT) || 3000;
-const API_KEY = process.env.API_KEY;
+const PORT = env.PORT;
+const API_KEY = env.API_KEY;
+
+// Parse CORS origins from env — comma-separated list or default ChatGPT origins
+const CORS_ORIGINS = env.CORS_ORIGINS
+	? env.CORS_ORIGINS.split(",").map((o) => o.trim())
+	: ["https://chat.openai.com", "https://chatgpt.com"];
 
 const app = new Elysia()
 	// ─── CORS — required for Custom GPT Actions ──────────────────────────────
 	.use(
 		cors({
-			origin: ["https://chat.openai.com", "https://chatgpt.com"],
-			methods: ["GET", "DELETE", "OPTIONS"],
+			origin: CORS_ORIGINS,
+			methods: ["GET", "POST", "OPTIONS"],
 			allowedHeaders: ["Content-Type", "Authorization"],
 			credentials: true,
 		}),
@@ -30,8 +44,8 @@ const app = new Elysia()
 	// ─── Rate limiting — protect against abuse (Notion API is expensive) ─────
 	.use(
 		rateLimit({
-			duration: 60_000, // 1 minute window
-			max: 60, // 60 requests per minute per IP
+			duration: env.RATE_LIMIT_WINDOW_MS,
+			max: env.RATE_LIMIT_MAX,
 			errorResponse: new Response(
 				JSON.stringify({
 					error: "Too many requests",
@@ -56,6 +70,7 @@ const app = new Elysia()
 		if (bearer !== API_KEY) {
 			return status(401, { error: "Unauthorized", message: "Invalid or missing API key." });
 		}
+		return;
 	})
 	// ─── Global error handler ─────────────────────────────────────────────────
 	.onError(({ code, error, set }) => {
@@ -102,6 +117,10 @@ const app = new Elysia()
 			set.status = 404;
 			return { error: "Not found", message: "The requested route does not exist." };
 		}
+		if (code === "PARSE") {
+			set.status = 400;
+			return { error: "Bad Request", message: error.message };
+		}
 		set.status = 500;
 		return { error: "Internal server error", message: "Something went wrong." };
 	})
@@ -113,14 +132,18 @@ const app = new Elysia()
 					title: "HR Prompt Knowledge Base API",
 					version: "1.0.0",
 					description:
-						"REST API serving 999 HR prompts from Notion — powers the HR Expert Assistant Custom GPT.",
+						"REST API serving an HR prompt knowledge base sourced from Notion. Provides categorized HR prompts for recruiting, compliance, performance management, and more. Designed for use with ChatGPT Custom Actions.",
 				},
+				...(env.DOMAIN
+					? { servers: [{ url: `https://${env.DOMAIN}`, description: "Production" }] }
+					: { servers: [{ url: "http://localhost:3000", description: "Development" }] }),
 				tags: [
 					{ name: "Categories", description: "HR topic categories" },
 					{ name: "Topics", description: "HR topics and their prompts" },
 					{ name: "Search", description: "Full-text search across prompts" },
 					{ name: "Prompts", description: "Random prompt suggestions" },
-					{ name: "System", description: "Health & cache management" },
+					{ name: "Summary", description: "Database summary statistics" },
+					{ name: "System", description: "Health, sync & webhook management" },
 				],
 				components: {
 					securitySchemes: {
@@ -135,11 +158,17 @@ const app = new Elysia()
 	.get(
 		"/health",
 		() => ({
-			status: "ok",
+			status: "ok" as const,
 			timestamp: new Date().toISOString(),
 		}),
 		{
-			detail: { tags: ["System"], summary: "Health check" },
+			detail: {
+				operationId: "getHealth",
+				tags: ["System"],
+				summary: "Health check",
+				description: "Returns server health status and current UTC timestamp.",
+			},
+			response: { 200: HealthResponseSchema },
 		},
 	)
 	// ─── Feature routes ──────────────────────────────────────────────────────
@@ -148,7 +177,8 @@ const app = new Elysia()
 	.use(searchRoute)
 	.use(promptsRoute)
 	.use(syncRoute)
-	.use(webhookRoute);
+	.use(webhookRoute)
+	.use(summaryRoute);
 
 // Listen only when running locally (not on Vercel serverless)
 if (process.env.VERCEL !== "1") {

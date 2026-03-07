@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { cache } from "../src/cache";
+import { cache } from "@/cache";
 
 describe("cache", () => {
 	beforeEach(() => {

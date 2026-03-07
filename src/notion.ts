@@ -4,110 +4,114 @@ import {
 	ClientErrorCode,
 	collectPaginatedAPI,
 	isFullBlock,
+	isFullDatabase,
 	isFullPage,
 	isNotionClientError,
 	iteratePaginatedAPI,
 } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints";
-import { cache } from "./cache";
-import type { Category, Prompt, SearchResult, Topic, TopicDetail } from "./types";
+import pLimit from "p-limit";
+import { cacheAdapter } from "@/cache-adapter";
+import { env } from "@/env";
+import type { Category, CategoryConfig, Prompt, SearchResult, Topic, TopicDetail } from "@/types";
 
 export { APIErrorCode, ClientErrorCode, isNotionClientError };
-export type { CategoryConfig, DatabaseCategory, PageCategory };
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const NOTION_CONCURRENCY = 5;
+const NOTION_PAGE_SIZE = 100;
+const NOTION_MAX_RETRIES = 3;
+const NOTION_API_VERSION = "2025-09-03";
 
 export const notion = new Client({
-	auth: process.env.NOTION_TOKEN,
-	notionVersion: "2025-09-03",
-	retry: { maxRetries: 3 },
+	auth: env.NOTION_TOKEN,
+	notionVersion: NOTION_API_VERSION,
+	retry: { maxRetries: NOTION_MAX_RETRIES },
 });
 
-// ─── Static category config (discovered from actual Notion structure) ────────
-//
-// Type A — "Database" categories: topics are rows in a Notion database.
-//   Each topic page has: heading_2 "About" → paragraph → heading_2 "Prompts"
-//   → numbered_list_items (prompts) → heading_2 "Tips" → numbered_list_items
-//
-// Type B — "Page" categories: prompts live directly in the page as
-//   numbered_list_items (first paragraph = description).
-
-interface DatabaseCategory {
-	type: "database";
-	name: string;
-	dataSourceId: string;
+function getNotionPageId(): string {
+	const id = env.NOTION_PAGE_ID;
+	if (!id) {
+		throw new Error("NOTION_PAGE_ID is not set in environment variables.");
+	}
+	return id;
 }
 
-interface PageCategory {
-	type: "page";
-	name: string;
-	pageId: string;
+// ─── Dynamic categories cache ─────────────────────────────────────────────────
+let dynamicCategoriesCache: CategoryConfig[] | null = null;
+
+/** Clear the in-memory category config cache. Call before a full sync so that
+ *  any structural Notion changes (new/removed categories) are picked up. */
+export function clearDynamicCategoriesCache(): void {
+	dynamicCategoriesCache = null;
 }
 
-type CategoryConfig = DatabaseCategory | PageCategory;
+export async function getDynamicCategories(): Promise<CategoryConfig[]> {
+	if (dynamicCategoriesCache) {
+		return dynamicCategoriesCache;
+	}
 
-export const CATEGORIES: CategoryConfig[] = [
-	// ── Type A: Database categories ──────────────────────────────────────────
-	{ type: "database", name: "Recruiting", dataSourceId: "4747601b-12ae-4816-8d50-9af10ecbf7c8" },
-	{
-		type: "database",
-		name: "Compensation & Benefits",
-		dataSourceId: "09a7a31c-3b87-4b25-8212-2bb94595f6b2",
-	},
-	{ type: "database", name: "Compliance", dataSourceId: "0885db86-ee51-4089-a84f-5d734959a22c" },
-	{
-		type: "database",
-		name: "Training & Development",
-		dataSourceId: "6596ba3b-5962-4466-800e-f1d5e442540b",
-	},
-	{
-		type: "database",
-		name: "Data & Analytics",
-		dataSourceId: "39ead630-f75e-4611-86ed-de143962242c",
-	},
-	{
-		type: "database",
-		name: "Performance Management",
-		dataSourceId: "49b99586-8800-4cda-9007-e4fe956b44a9",
-	},
-	{ type: "database", name: "HR Technology", dataSourceId: "0d185ac9-3bca-4a88-a8ca-7786dde40600" },
-	{
-		type: "database",
-		name: "Employee Relations",
-		dataSourceId: "b7401bf2-bbae-4aa4-b5d6-144524de71e2",
-	},
-	{
-		type: "database",
-		name: "Workforce Planning",
-		dataSourceId: "1221b651-fcef-409c-bfbe-d1354b8f6fc1",
-	},
-	{
-		type: "database",
-		name: "Leadership Development",
-		dataSourceId: "d96e2701-ec3a-497a-9e51-9e4905dfb40b",
-	},
-	// ── Type B: Page categories (prompts stored directly in the page) ─────────
-	{ type: "page", name: "Employee Onboarding", pageId: "533210e82b964a4f9edceb40536078d1" },
-	{
-		type: "page",
-		name: "Performance Management (Overview)",
-		pageId: "1ff63b3e7af3411295f897e3b582ba3e",
-	},
-	{ type: "page", name: "Conflict Resolution", pageId: "8e51c81687f540a5b38d6973767142ce" },
-	{ type: "page", name: "Diversity and Inclusion", pageId: "74129123b32d44bdbde4617f966168db" },
-	{ type: "page", name: "Employee Engagement", pageId: "55da36030ccb46b385a38e5e5bee19e5" },
-	{ type: "page", name: "Talent Acquisition", pageId: "e96240eaec2147acb50b3933e13820c0" },
-	{
-		type: "page",
-		name: "Employee Benefits and Compensation",
-		pageId: "d32245a4dbaa4783b605901c69ac74d3",
-	},
-	{
-		type: "page",
-		name: "Workplace Policies and Compliance",
-		pageId: "cc13a3b34de04fd99c94eb5bab6567b3",
-	},
-	{ type: "page", name: "Training and Development", pageId: "013f765535904ac0b4b8c92d479807e2" },
-	{ type: "page", name: "Employee Offboarding", pageId: "113e7d5d60e04182bd528f059c0802a7" },
-];
+	const categories: CategoryConfig[] = [];
+	await collectDatabaseCategories(getNotionPageId(), categories, 0);
+
+	dynamicCategoriesCache = categories;
+	return categories;
+}
+
+/**
+ * Recursively traverses the Notion block tree rooted at `blockId` and collects
+ * every `child_database` block as a DatabaseCategory.
+ *
+ * In the 2025-09-03 API, `notion.databases.retrieve()` returns a `data_sources`
+ * array. We use `data_sources[0].id` — the actual data source ID required by
+ * `notion.dataSources.query()` — instead of the database ID.
+ *
+ * Container blocks (`column_list`, `column`, `child_page`, etc.) are recursed
+ * into but not added as categories themselves.
+ */
+async function collectDatabaseCategories(
+	blockId: string,
+	categories: CategoryConfig[],
+	depth: number,
+): Promise<void> {
+	const MAX_DEPTH = 5;
+	if (depth > MAX_DEPTH) return;
+
+	const children = await getAllChildren(blockId);
+
+	for (const block of children) {
+		if (block.type === "child_database") {
+			const db = await notion.databases.retrieve({ database_id: block.id });
+			if (isFullDatabase(db)) {
+				// In API version 2025-09-03, each database exposes its data sources.
+				// The data_source_id is required by notion.dataSources.query().
+				const dataSource = db.data_sources[0];
+				if (!dataSource) continue; // Skip databases with no accessible data source
+				categories.push({
+					type: "database",
+					name: extractPlainText(db.title),
+					description: extractPlainText(db.description),
+					dataSourceId: dataSource.id,
+				});
+			}
+		} else if (block.type === "child_page") {
+			const { description } = await extractPageCategoryPrompts(block.id);
+			categories.push({
+				type: "page",
+				name: block.child_page.title,
+				description,
+				pageId: block.id,
+			});
+			// Recurse to find nested categories
+			await collectDatabaseCategories(block.id, categories, depth + 1);
+		} else if (block.has_children) {
+			// Recurse into any other container block (e.g. column_list, column)
+			await collectDatabaseCategories(block.id, categories, depth + 1);
+		}
+	}
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function slugify(text: string): string {
 	return text
@@ -120,18 +124,16 @@ function extractPlainText(richText: { plain_text: string }[]): string {
 	return richText.map((t) => t.plain_text).join("");
 }
 
-// Paginate through all children of a block using SDK utility
 async function getAllChildren(blockId: string): Promise<BlockObjectResponse[]> {
 	const all = await collectPaginatedAPI(notion.blocks.children.list, {
 		block_id: blockId,
-		page_size: 100,
+		page_size: NOTION_PAGE_SIZE,
 	});
 	return all.filter(isFullBlock);
 }
 
-// ─── Extract prompts from a DB-style topic page ──────────────────────────────
-// Structure: heading_2 "About" → paragraph → heading_2 "Prompts"
-//            → numbered_list_items → heading_2 "Tips" → numbered_list_items
+// ─── Topic content extractors ─────────────────────────────────────────────────
+
 async function extractTopicPagePrompts(
 	pageId: string,
 ): Promise<{ description: string; prompts: Prompt[]; tips: Prompt[] }> {
@@ -170,8 +172,6 @@ async function extractTopicPagePrompts(
 	return { description, prompts, tips };
 }
 
-// ─── Extract prompts from a Page-style category page ─────────────────────────
-// Structure: paragraph (description) → numbered_list_items (all prompts)
 async function extractPageCategoryPrompts(
 	pageId: string,
 ): Promise<{ description: string; prompts: Prompt[] }> {
@@ -195,19 +195,15 @@ async function extractPageCategoryPrompts(
 	return { description, prompts };
 }
 
-// ─── Query all topic rows from a Notion data source ──────────────────────────
-// Uses notion.dataSources.query() (SDK v5) with filter_properties for performance.
 async function queryDataSource(dataSourceId: string): Promise<{ id: string; name: string }[]> {
 	const rows: { id: string; name: string }[] = [];
 
-	// iteratePaginatedAPI handles cursor pagination automatically
 	for await (const row of iteratePaginatedAPI(notion.dataSources.query, {
 		data_source_id: dataSourceId,
 		filter_properties: ["title"],
-		page_size: 100,
+		page_size: NOTION_PAGE_SIZE,
 	})) {
 		if (!isFullPage(row)) continue;
-		// Find the title-type property regardless of its display name ("Name", "Title", etc.)
 		const titleProp = Object.values(row.properties).find((p) => p.type === "title");
 		const name = titleProp?.type === "title" ? extractPlainText(titleProp.title) : "";
 		if (name) rows.push({ id: row.id.replace(/-/g, ""), name });
@@ -216,12 +212,21 @@ async function queryDataSource(dataSourceId: string): Promise<{ id: string; name
 	return rows;
 }
 
+// ─── Concurrency helper ───────────────────────────────────────────────────────
+
+async function fetchDetailsConcurrently(
+	topicIds: string[],
+	concurrency = NOTION_CONCURRENCY,
+): Promise<(TopicDetail | null)[]> {
+	const limit = pLimit(concurrency);
+	const settled = await Promise.allSettled(topicIds.map((id) => limit(() => getTopicDetail(id))));
+	return settled.map((s) => (s.status === "fulfilled" ? s.value : null));
+}
+
 // ─── Public service methods ───────────────────────────────────────────────────
 
-// Expose getAllChildren for sync service
 export { getAllChildren as getAllChildrenPublic };
 
-// Raw Notion → typed rows for the sync service
 export async function getTopicsFromNotion(cat: CategoryConfig): Promise<
 	Array<{
 		id: string;
@@ -245,7 +250,6 @@ export async function getTopicsFromNotion(cat: CategoryConfig): Promise<
 	];
 }
 
-// Raw Notion → prompts for the sync service
 export async function getTopicDetailFromNotion(
 	notionPageId: string,
 	type: "database" | "page",
@@ -260,36 +264,34 @@ export async function getTopicDetailFromNotion(
 
 export async function getCategories(): Promise<Category[]> {
 	const CACHE_KEY = "categories";
-	const cached = cache.get<Category[]>(CACHE_KEY);
+	const cached = await cacheAdapter.get<Category[]>(CACHE_KEY);
 	if (cached) return cached;
 
-	const categories: Category[] = CATEGORIES.map((c) => ({
+	const dynamicCategories = await getDynamicCategories();
+	const categories: Category[] = dynamicCategories.map((c) => ({
 		id: slugify(c.name),
 		name: c.name,
-		description:
-			c.type === "database"
-				? "Topics with individual prompt collections"
-				: "Comprehensive prompt collection",
-		topicCount: c.type === "page" ? 1 : 0, // DB counts fetched lazily
+		description: c.description,
+		topicCount: c.type === "page" ? 1 : 0,
 	}));
 
-	cache.set(CACHE_KEY, categories);
+	await cacheAdapter.set(CACHE_KEY, categories);
 	return categories;
 }
 
 export async function getTopics(categoryId?: string): Promise<Topic[]> {
 	const CACHE_KEY = `topics:${categoryId ?? "all"}`;
-	const cached = cache.get<Topic[]>(CACHE_KEY);
+	const cached = await cacheAdapter.get<Topic[]>(CACHE_KEY);
 	if (cached) return cached;
 
 	const topics: Topic[] = [];
+	const allCategories = await getDynamicCategories();
 	const targets = categoryId
-		? CATEGORIES.filter((c) => slugify(c.name) === categoryId)
-		: CATEGORIES;
+		? allCategories.filter((c) => slugify(c.name) === categoryId)
+		: allCategories;
 
 	for (const cat of targets) {
 		const catId = slugify(cat.name);
-
 		if (cat.type === "database") {
 			const rows = await queryDataSource(cat.dataSourceId);
 			for (const row of rows) {
@@ -298,11 +300,10 @@ export async function getTopics(categoryId?: string): Promise<Topic[]> {
 					name: row.name,
 					categoryId: catId,
 					categoryName: cat.name,
-					promptCount: 0, // filled in getTopicDetail
+					promptCount: 0,
 				});
 			}
 		} else {
-			// Page category — the page itself is the single "topic"
 			topics.push({
 				id: `${catId}--overview`,
 				name: cat.name,
@@ -313,17 +314,17 @@ export async function getTopics(categoryId?: string): Promise<Topic[]> {
 		}
 	}
 
-	cache.set(CACHE_KEY, topics);
+	await cacheAdapter.set(CACHE_KEY, topics);
 	return topics;
 }
 
 export async function getTopicDetail(topicId: string): Promise<TopicDetail | null> {
 	const CACHE_KEY = `topic:${topicId}`;
-	const cached = cache.get<TopicDetail>(CACHE_KEY);
+	const cached = await cacheAdapter.get<TopicDetail>(CACHE_KEY);
 	if (cached) return cached;
 
-	// Find which category this topic belongs to
-	for (const cat of CATEGORIES) {
+	const allCategories = await getDynamicCategories();
+	for (const cat of allCategories) {
 		const catId = slugify(cat.name);
 
 		if (cat.type === "page" && topicId === `${catId}--overview`) {
@@ -337,17 +338,15 @@ export async function getTopicDetail(topicId: string): Promise<TopicDetail | nul
 				promptCount: prompts.length,
 				prompts,
 			};
-			cache.set(CACHE_KEY, detail);
+			await cacheAdapter.set(CACHE_KEY, detail);
 			return detail;
 		}
 
 		if (cat.type === "database" && topicId.startsWith(`${catId}--`)) {
-			// Extract the Notion page ID suffix we stored (last 8 chars of UUID)
 			const parts = topicId.split("--");
 			const pageIdSuffix = parts[parts.length - 1];
 			if (!pageIdSuffix) continue;
 
-			// Lookup the full page ID from the data source
 			const rows = await queryDataSource(cat.dataSourceId);
 			const row = rows.find(
 				(r) => r.id.startsWith(pageIdSuffix) || r.id.slice(0, 8) === pageIdSuffix,
@@ -364,30 +363,12 @@ export async function getTopicDetail(topicId: string): Promise<TopicDetail | nul
 				promptCount: prompts.length,
 				prompts,
 			};
-			cache.set(CACHE_KEY, detail);
+			await cacheAdapter.set(CACHE_KEY, detail);
 			return detail;
 		}
 	}
 
 	return null;
-}
-
-// Fetch topic details concurrently with a concurrency cap to avoid rate limits
-async function fetchDetailsConcurrently(
-	topicIds: string[],
-	concurrency = 5,
-): Promise<(TopicDetail | null)[]> {
-	const results: (TopicDetail | null)[] = new Array(topicIds.length).fill(null);
-	for (let i = 0; i < topicIds.length; i += concurrency) {
-		const batch = topicIds.slice(i, i + concurrency);
-		const settled = await Promise.allSettled(batch.map((id) => getTopicDetail(id)));
-		for (let j = 0; j < settled.length; j++) {
-			const s = settled[j];
-			if (!s) continue;
-			results[i + j] = s.status === "fulfilled" ? s.value : null;
-		}
-	}
-	return results;
 }
 
 export async function searchPrompts(
@@ -399,13 +380,11 @@ export async function searchPrompts(
 	const q = query.toLowerCase();
 	const results: SearchResult[] = [];
 
-	// Fetch in batches; stop fetching once we have enough results
-	const BATCH = 5;
-	for (let i = 0; i < topics.length && results.length < limit; i += BATCH) {
-		const batch = topics.slice(i, i + BATCH);
+	for (let i = 0; i < topics.length && results.length < limit; i += NOTION_CONCURRENCY) {
+		const batch = topics.slice(i, i + NOTION_CONCURRENCY);
 		const details = await fetchDetailsConcurrently(
 			batch.map((t) => t.id),
-			BATCH,
+			NOTION_CONCURRENCY,
 		);
 		for (let j = 0; j < batch.length; j++) {
 			const topic = batch[j];
@@ -431,11 +410,10 @@ export async function searchPrompts(
 
 export async function getRandomPrompts(count = 5, categoryId?: string): Promise<SearchResult[]> {
 	const topics = await getTopics(categoryId);
-	// Pick more candidates than needed to account for empty topics
 	const candidates = [...topics].sort(() => Math.random() - 0.5).slice(0, count * 3);
 	const details = await fetchDetailsConcurrently(
 		candidates.map((t) => t.id),
-		5,
+		NOTION_CONCURRENCY,
 	);
 
 	const results: SearchResult[] = [];

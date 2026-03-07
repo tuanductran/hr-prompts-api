@@ -90,3 +90,72 @@ export const RandomQuery = t.Object({
 	category_id: t.Optional(t.String()),
 	count: t.Optional(t.Numeric({ minimum: 1, maximum: 20, default: 5 })),
 });
+
+// ─── category detail ─────────────────────────────────────────────────────────
+
+export const CategoryDetailSchema = t.Object({
+	id: t.String({ description: "Slugified category ID" }),
+	name: t.String({ description: "Display name" }),
+	description: t.String(),
+	topics: t.Array(TopicSchema),
+});
+
+// ─── summary ─────────────────────────────────────────────────────────────────
+
+export const SummaryResponseSchema = t.Object({
+	categories: t.Number({ description: "Total number of categories" }),
+	topics: t.Number({ description: "Total number of topics" }),
+	prompts: t.Number({ description: "Total number of prompts" }),
+});
+
+// ─── health ──────────────────────────────────────────────────────────────────
+
+export const HealthResponseSchema = t.Object({
+	status: t.Literal("ok"),
+	timestamp: t.String({ description: "ISO 8601 server timestamp" }),
+});
+
+// ─── sync ─────────────────────────────────────────────────────────────────────
+
+// The sync details field contains counts on success, or an error string on failure.
+// Using a union instead of t.Unknown() gives the OpenAPI spec a concrete shape and
+// prevents the TypeBox schema from silently accepting any value.
+const SyncDetailsSchema = t.Nullable(
+	t.Union([
+		t.Object({
+			categories: t.Number({ description: "Categories synced" }),
+			topics: t.Number({ description: "Topics synced" }),
+			prompts: t.Number({ description: "Prompts synced" }),
+		}),
+		t.String({ description: "Error message on failure" }),
+	]),
+);
+
+export const SyncLastSchema = t.Object({
+	status: t.Union([t.Literal("started"), t.Literal("completed"), t.Literal("failed")]),
+	startedAt: t.Nullable(t.String({ description: "ISO 8601 timestamp" })),
+	completedAt: t.Nullable(t.String({ description: "ISO 8601 timestamp" })),
+	details: SyncDetailsSchema,
+});
+
+export const SyncStatusResponseSchema = t.Object({
+	lastSync: t.Nullable(SyncLastSchema),
+});
+
+export const SyncResultResponseSchema = t.Object({
+	success: t.Boolean(),
+	categories: t.Number({ description: "Number of categories synced" }),
+	topics: t.Number({ description: "Number of topics synced" }),
+	prompts: t.Number({ description: "Number of prompts synced" }),
+});
+
+// ─── webhook ──────────────────────────────────────────────────────────────────
+
+export const WebhookReceivedSchema = t.Object({
+	received: t.Boolean(),
+});
+
+export const VerificationTokenSchema = t.Object({
+	token: t.String({ description: "Notion verification token" }),
+	receivedAt: t.String({ description: "ISO 8601 timestamp when the token was received" }),
+});

@@ -1,18 +1,26 @@
 import { describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Elysia } from "elysia";
-import { webhookRoute } from "../../src/routes/webhook";
+import { webhookRoute } from "@/routes/webhook";
+
+const NOTION_WEBHOOK_SECRET = process.env.NOTION_WEBHOOK_SECRET;
 
 // Build a minimal app with only the webhook route.
-// WEBHOOK_SECRET is read at module load time; since it is not set in the test
-// environment, HMAC verification is skipped — all well-formed requests are accepted.
 const app = new Elysia().use(webhookRoute);
 
 function makeRequest(body: unknown, headers?: Record<string, string>) {
+	const bodyString = JSON.stringify(body);
+	const requestHeaders: Record<string, string> = { "Content-Type": "application/json", ...headers };
+
+	// If the secret is configured in the test environment, add the signature header.
+	if (NOTION_WEBHOOK_SECRET) {
+		requestHeaders["x-notion-signature"] = hmacSignature(bodyString, NOTION_WEBHOOK_SECRET);
+	}
+
 	return new Request("http://localhost/webhook/notion", {
 		method: "POST",
-		headers: { "Content-Type": "application/json", ...headers },
-		body: JSON.stringify(body),
+		headers: requestHeaders,
+		body: bodyString,
 	});
 }
 
@@ -59,7 +67,7 @@ describe("POST /webhook/notion — verification handshake", () => {
 	});
 });
 
-describe("POST /webhook/notion — event dispatch (no HMAC configured)", () => {
+describe("POST /webhook/notion — event dispatch", () => {
 	it("returns received: true for a page content_updated event", async () => {
 		const response = await app.handle(
 			makeRequest({
@@ -82,13 +90,19 @@ describe("POST /webhook/notion — event dispatch (no HMAC configured)", () => {
 	});
 
 	it("returns received: true for invalid JSON body", async () => {
-		const response = await app.handle(
-			new Request("http://localhost/webhook/notion", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: "not-valid-json",
-			}),
-		);
+		const request = new Request("http://localhost/webhook/notion", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "not-valid-json",
+		});
+
+		// If the secret is configured, we need to sign even an invalid body
+		if (NOTION_WEBHOOK_SECRET) {
+			const sig = hmacSignature(await request.clone().text(), NOTION_WEBHOOK_SECRET);
+			request.headers.set("x-notion-signature", sig);
+		}
+
+		const response = await app.handle(request);
 		// The endpoint catches JSON parse errors and returns received: true
 		expect(response.status).toBe(200);
 		const body = await response.json();

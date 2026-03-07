@@ -27,9 +27,18 @@ words:
   - slugified
   - cloudflared
   - mdlint
-  # British spelling (used in British-authored libs)
+  # British spelling (used in British-authored libs and project comments)
   - behaviour
   - synchronisation
+  - initialisation
+  - initialised
+  - initialises
+  # Vercel KV / Redis commands
+  - sadd
+  - srem
+  - smembers
+  # Project-specific identifiers
+  - tuanductran
 
 ignorePaths:
   - node_modules

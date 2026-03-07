@@ -1,13 +1,29 @@
 import { count, eq } from "drizzle-orm";
 import Elysia from "elysia";
-import { db, schema } from "../db";
-import { ErrorSchema, PaginationQuery, TopicDetailSchema, TopicsResponseSchema } from "../models";
+import { cacheAdapter } from "@/cache-adapter";
+import { db, schema } from "@/db";
+import { ErrorSchema, PaginationQuery, TopicDetailSchema, TopicsResponseSchema } from "@/models";
 
 export const topicsRoute = new Elysia()
 	.get(
 		"/topics",
 		async ({ query }) => {
 			const { category_id, page = 1, limit = 20 } = query;
+
+			const CACHE_KEY = `topics:list:${category_id ?? "all"}:${page}:${limit}`;
+			const cached = await cacheAdapter.get<{
+				topics: {
+					id: string;
+					name: string;
+					categoryId: string;
+					categoryName: string;
+					promptCount: number;
+				}[];
+				total: number;
+				page: number;
+				limit: number;
+			}>(CACHE_KEY);
+			if (cached) return cached;
 
 			const where = category_id ? eq(schema.topics.categoryId, category_id) : undefined;
 
@@ -31,7 +47,7 @@ export const topicsRoute = new Elysia()
 			const countResult = await db.select({ total: count() }).from(schema.topics).where(where);
 			const total = countResult[0]?.total ?? 0;
 
-			return {
+			const result = {
 				topics: rows.map((r) => ({
 					id: r.id,
 					name: r.name,
@@ -43,20 +59,37 @@ export const topicsRoute = new Elysia()
 				page,
 				limit,
 			};
+
+			await cacheAdapter.set(CACHE_KEY, result);
+			return result;
 		},
 		{
 			detail: {
+				operationId: "listTopics",
 				summary: "List topics",
-				description: "Returns HR topics, optionally filtered by category.",
+				description:
+					"Returns paginated HR topics. Filter by category_id to narrow results. Use the returned topic IDs with GET /topics/:id to fetch the full prompt list.",
 				tags: ["Topics"],
 			},
 			query: PaginationQuery,
-			response: { 200: TopicsResponseSchema },
+			response: { 200: TopicsResponseSchema, 422: ErrorSchema },
 		},
 	)
 	.get(
 		"/topics/:topic_id",
 		async ({ params, status }) => {
+			const CACHE_KEY = `topic:${params.topic_id}`;
+			const cached = await cacheAdapter.get<{
+				id: string;
+				name: string;
+				categoryId: string;
+				categoryName: string;
+				description: string;
+				promptCount: number;
+				prompts: { number: number; text: string }[];
+			}>(CACHE_KEY);
+			if (cached) return cached;
+
 			const topic = await db
 				.select({
 					id: schema.topics.id,
@@ -84,7 +117,7 @@ export const topicsRoute = new Elysia()
 				.where(eq(schema.prompts.topicId, params.topic_id))
 				.orderBy(schema.prompts.orderIndex);
 
-			return {
+			const topicResult = {
 				id: topic.id,
 				name: topic.name,
 				categoryId: topic.categoryId,
@@ -93,11 +126,16 @@ export const topicsRoute = new Elysia()
 				promptCount: promptRows.length,
 				prompts: promptRows.map((p, i) => ({ number: i + 1, text: p.text })),
 			};
+
+			await cacheAdapter.set(CACHE_KEY, topicResult);
+			return topicResult;
 		},
 		{
 			detail: {
+				operationId: "getTopicById",
 				summary: "Get topic with prompts",
-				description: "Returns a topic and all its HR prompts.",
+				description:
+					"Returns a topic and its complete list of HR prompts. This is the primary endpoint for retrieving actual prompt text for a given topic.",
 				tags: ["Topics"],
 			},
 			response: { 200: TopicDetailSchema, 404: ErrorSchema },

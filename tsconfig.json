@@ -1,29 +1,36 @@
 {
   "compilerOptions": {
-    // Environment setup & latest features
+    // Runtime & target configuration for Bun
     "lib": ["ESNext"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
-    "jsx": "react-jsx",
 
-    // Bundler mode
+    // Module resolution for Bun
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
-    // Best practices
+    // Strict mode — required by AGENTS.md
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    "noImplicitAny": true,
 
-    // Some stricter flags (disabled by default)
+    // Type safety — enforce by AGENTS.md rules
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noPropertyAccessFromIndexSignature": false
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": false,
+
+    // Path aliases
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist", "drizzle"]
 }

@@ -7,6 +7,7 @@ export const categories = sqliteTable("categories", {
 	name: text("name").notNull(),
 	type: text("type", { enum: ["database", "page"] }).notNull(),
 	notionId: text("notion_id").notNull(), // data_source_id or page_id
+	description: text("description"),
 	syncedAt: integer("synced_at", { mode: "timestamp" }),
 });
 
@@ -61,7 +62,9 @@ export const promptsRelations = relations(prompts, ({ one }) => ({
 	}),
 }));
 
-export type Category = typeof categories.$inferSelect;
-export type Topic = typeof topics.$inferSelect;
-export type Prompt = typeof prompts.$inferSelect;
-export type SyncLog = typeof syncLog.$inferSelect;
+// Row types — use the `Row` suffix to avoid shadowing the application-layer
+// types of the same name defined in src/types.ts.
+export type CategoryRow = typeof categories.$inferSelect;
+export type TopicRow = typeof topics.$inferSelect;
+export type PromptRow = typeof prompts.$inferSelect;
+export type SyncLogRow = typeof syncLog.$inferSelect;

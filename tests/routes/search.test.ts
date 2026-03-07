@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Elysia } from "elysia";
-import { promptsRoute } from "../../src/routes/prompts";
-import { searchRoute } from "../../src/routes/search";
-import { topicsRoute } from "../../src/routes/topics";
+import { promptsRoute } from "@/routes/prompts";
+import { searchRoute } from "@/routes/search";
+import { topicsRoute } from "@/routes/topics";
 
 // Use route modules directly — no auth middleware — to test TypeBox validation
 // and handler-level input checks in isolation.

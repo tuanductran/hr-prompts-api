@@ -19,6 +19,7 @@ function createApp(apiKey: string | undefined) {
 			if (token !== apiKey) {
 				return status(401, { error: "Unauthorized", message: "Invalid or missing API key." });
 			}
+			return;
 		})
 		.get("/health", () => ({ status: "ok" }))
 		.get("/protected", () => ({ data: "secret" }));

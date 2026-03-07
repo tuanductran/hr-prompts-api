@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import Elysia from "elysia";
-import { db, schema } from "../db";
-import { RandomPromptsResponseSchema, RandomQuery } from "../models";
+import { db, schema } from "@/db";
+import { ErrorSchema, RandomPromptsResponseSchema, RandomQuery } from "@/models";
 
 export const promptsRoute = new Elysia().get(
 	"/prompts/random",
@@ -36,11 +36,13 @@ export const promptsRoute = new Elysia().get(
 	},
 	{
 		detail: {
+			operationId: "getRandomPrompts",
 			summary: "Get random HR prompts",
-			description: "Returns random HR prompts, useful for suggestions and inspiration.",
+			description:
+				"Returns random HR prompts for inspiration. Use this when the user wants ideas or suggestions without a specific topic in mind. Optionally filter by category_id.",
 			tags: ["Prompts"],
 		},
 		query: RandomQuery,
-		response: { 200: RandomPromptsResponseSchema },
+		response: { 200: RandomPromptsResponseSchema, 422: ErrorSchema },
 	},
 );

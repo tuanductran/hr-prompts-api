@@ -1,7 +1,4 @@
-interface CacheEntry<T> {
-	data: T;
-	expiresAt: number;
-}
+import type { CacheEntry } from "@/types";
 
 const store = new Map<string, CacheEntry<unknown>>();
 const TTL_MS = (Number(process.env.CACHE_TTL_SECONDS) || 300) * 1000;

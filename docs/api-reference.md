@@ -1,17 +1,45 @@
 # API reference
 
-Base URL (local): `http://localhost:3000`  
-Base URL (production): `https://hr-prompts-api.vercel.app`
+Base URL (local): `http://localhost:3000`
+
+Base URL (production): set `DOMAIN` env var — the OpenAPI spec will reflect it automatically.
 
 Interactive docs (Scalar UI): `GET /openapi`
 
 ## Authentication
 
-When `API_KEY` is set, all endpoints (except `/health`, `/openapi`, `/webhook/notion`) require a Bearer token:
+When `API_KEY` is set, all endpoints (except `/health`, `/openapi`, and `/webhook/notion/*`) require a Bearer token:
 
 ```http
 Authorization: Bearer <API_KEY>
 ```
+
+See [Authentication](./authentication.md) for details.
+
+---
+
+## Error responses
+
+All endpoints return errors in the same format:
+
+```json
+{
+  "error": "<short error type>",
+  "message": "<human-readable description>"
+}
+```
+
+| Status | When |
+|---|---|
+| `400` | Query parameter failed handler-level validation (e.g. blank search query) |
+| `401` | Missing or invalid Bearer token |
+| `404` | Route or resource does not exist |
+| `422` | Request failed TypeBox schema validation |
+| `429` | Rate limit exceeded (default: 60 req/min per IP) |
+| `500` | Unexpected server error |
+| `502` | Notion API is temporarily unavailable |
+| `503` | Invalid or missing Notion integration token |
+| `504` | Notion API request timed out |
 
 ---
 
@@ -26,7 +54,7 @@ Returns the current server status. No authentication required.
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-02-28T00:00:00.000Z"
+  "timestamp": "2026-03-05T00:00:00.000Z"
 }
 ```
 
@@ -36,7 +64,7 @@ Returns the current server status. No authentication required.
 
 ### `GET /categories`
 
-Returns all 20 HR categories with their topic counts.
+Returns all HR categories with their topic counts.
 
 **Response 200**
 
@@ -55,6 +83,46 @@ Returns all 20 HR categories with their topic counts.
 
 ---
 
+### `GET /categories/:id`
+
+Returns a single category with all its topics.
+
+**Path parameters**
+
+| Parameter | Description |
+|---|---|
+| `id` | Category slug from `GET /categories` (e.g. `recruiting`) |
+
+**Response 200**
+
+```json
+{
+  "id": "recruiting",
+  "name": "Recruiting",
+  "description": "Topics with individual prompt collections",
+  "topics": [
+    {
+      "id": "recruiting--conducting-reference-checks--02b0893c",
+      "name": "Conducting Reference Checks",
+      "categoryId": "recruiting",
+      "categoryName": "Recruiting",
+      "promptCount": 7
+    }
+  ]
+}
+```
+
+**Response 404**
+
+```json
+{
+  "error": "Category not found",
+  "message": "No category found with id: <id>"
+}
+```
+
+---
+
 ## Topics
 
 ### `GET /topics`
@@ -66,8 +134,8 @@ Returns a paginated list of topics, optionally filtered by category.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `category_id` | string | — | Filter by category slug (e.g. `recruiting`) |
-| `page` | number | `1` | Page number |
-| `limit` | number | `20` | Results per page (max 100) |
+| `page` | number | `1` | Page number (minimum: 1) |
+| `limit` | number | `20` | Results per page (minimum: 1, maximum: 100) |
 
 **Response 200**
 
@@ -88,11 +156,13 @@ Returns a paginated list of topics, optionally filtered by category.
 }
 ```
 
+**Response 422** — returned when `page` or `limit` fail TypeBox validation.
+
 ---
 
 ### `GET /topics/:topic_id`
 
-Returns a single topic with all its prompts.
+Returns a single topic with its complete list of prompts.
 
 **Path parameters**
 
@@ -132,7 +202,7 @@ Returns a single topic with all its prompts.
 
 ### `GET /search`
 
-Full-text search across all 1,511 prompts. Results are grouped by topic.
+Full-text search across all prompts. Results are grouped by topic.
 
 **Query parameters**
 
@@ -140,7 +210,7 @@ Full-text search across all 1,511 prompts. Results are grouped by topic.
 |---|---|---|---|
 | `q` | string | **required** | Search query (minimum 2 characters) |
 | `category_id` | string | — | Limit search to a specific category |
-| `limit` | number | `10` | Maximum number of topics to return |
+| `limit` | number | `10` | Maximum number of topics to return (maximum: 50) |
 
 **Response 200**
 
@@ -162,14 +232,9 @@ Full-text search across all 1,511 prompts. Results are grouped by topic.
 }
 ```
 
-**Response 400**
+**Response 400** — `q` is blank or contains only whitespace.
 
-```json
-{
-  "error": "Query too short",
-  "message": "Parameter 'q' must be at least 2 characters."
-}
-```
+**Response 422** — `q` is shorter than 2 characters (TypeBox `minLength` validation).
 
 ---
 
@@ -177,13 +242,13 @@ Full-text search across all 1,511 prompts. Results are grouped by topic.
 
 ### `GET /prompts/random`
 
-Returns random HR prompts. Useful for inspiration and suggestions in the ChatGPT interface.
+Returns random HR prompts. Useful for inspiration and suggestions.
 
 **Query parameters**
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `count` | number | `5` | Number of random prompts to return |
+| `count` | number | `5` | Number of random prompts (minimum: 1, maximum: 20) |
 | `category_id` | string | — | Limit to a specific category |
 
 **Response 200**
@@ -204,6 +269,26 @@ Returns random HR prompts. Useful for inspiration and suggestions in the ChatGPT
 }
 ```
 
+**Response 422** — `count` exceeds 20.
+
+---
+
+## Summary
+
+### `GET /summary`
+
+Returns the total count of categories, topics, and prompts currently in the database.
+
+**Response 200**
+
+```json
+{
+  "categories": 20,
+  "topics": 262,
+  "prompts": 1511
+}
+```
+
 ---
 
 ## Sync
@@ -218,12 +303,14 @@ Returns the status and stats of the most recent Notion sync.
 {
   "lastSync": {
     "status": "completed",
-    "startedAt": "2026-02-28T00:00:00.000Z",
-    "completedAt": "2026-02-28T00:01:00.000Z",
+    "startedAt": "2026-03-05T00:00:00.000Z",
+    "completedAt": "2026-03-05T00:01:00.000Z",
     "details": { "categories": 20, "topics": 262, "prompts": 1511 }
   }
 }
 ```
+
+`lastSync` is `null` when no sync has been run. `details` is a counts object on success or an error string on failure.
 
 ---
 
@@ -242,60 +329,39 @@ Triggers a full re-sync of all Notion content into the Turso database. Requires 
 }
 ```
 
+**Response 500** — sync failed; `message` contains the error.
+
 ---
 
 ## Webhook
 
 ### `GET /webhook/notion/token`
 
-Returns the last verification token sent by Notion during webhook setup. No authentication required.
+Returns the last `verification_token` sent by Notion during webhook setup. No authentication required.
 
 **Response 200**
 
 ```json
 {
   "token": "v1:xxxx...",
-  "receivedAt": "2026-02-28T02:30:00.000Z"
+  "receivedAt": "2026-03-05T02:30:00.000Z"
 }
 ```
 
-**Response 404**
-
-```json
-{
-  "error": "Not found",
-  "message": "No verification token received yet. Trigger it from Notion integration settings."
-}
-```
+**Response 404** — no verification request has been received yet.
 
 ---
 
 ### `POST /webhook/notion`
 
-Receives webhook events from Notion. Used for real-time content updates. No Bearer token required — authentication uses HMAC-SHA256 if `NOTION_WEBHOOK_SECRET` is set.
+Receives webhook events from Notion. No Bearer token required. When `NOTION_WEBHOOK_SECRET` is set, the HMAC-SHA256 signature in `x-notion-signature` is verified.
 
-See [Webhook setup](./webhook.md) for configuration details.
+See [Webhook setup](./webhook.md) for full configuration details.
 
----
-
-## Error responses
-
-All endpoints return errors in the same format:
+**Response 200**
 
 ```json
-{
-  "error": "<short error type>",
-  "message": "<human-readable description>"
-}
+{ "received": true }
 ```
 
-| Status | Error | When |
-|---|---|---|
-| 400 | Validation error | Invalid query parameters |
-| 401 | Unauthorized | Missing or invalid Bearer token |
-| 404 | Not found | Route or resource does not exist |
-| 422 | Validation error | Request body failed schema validation |
-| 429 | Too many requests | Rate limit exceeded (60 req/min per IP) |
-| 500 | Internal server error | Unexpected server error |
-| 502 | Notion unavailable | Notion API is temporarily down |
-| 504 | Timeout | Notion API request timed out |
+**Response 401** — signature verification failed.
